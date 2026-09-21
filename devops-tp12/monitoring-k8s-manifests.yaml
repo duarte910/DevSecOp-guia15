@@ -1,0 +1,712 @@
+# ==============================================================================
+# PROYECTO INTEGRADOR DEVOPS — STACK DE MONITOREO EN KUBERNETES
+# Manifiestos para Prometheus, Grafana, Node Exporter y cAdvisor
+# Namespace: devops-portfolio
+# ==============================================================================
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-sa
+  namespace: devops-portfolio
+  labels:
+    app: prometheus
+    component: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-cluster-role
+  labels:
+    app: prometheus
+    component: monitoring
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-role-binding
+  labels:
+    app: prometheus
+    component: monitoring
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-sa
+    namespace: devops-portfolio
+roleRef:
+  kind: ClusterRole
+  name: prometheus-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: devops-portfolio
+  labels:
+    app: prometheus
+    component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        monitor: 'devops-portfolio'
+        environment: 'kubernetes'
+
+    rule_files:
+      - "/etc/prometheus/alerts.yml"
+
+    scrape_configs:
+      # 1. Auto-monitoreo de Prometheus
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # 2. Descubrimiento dinámico del Backend Flask (Service Discovery)
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: backend
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: "5000"
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: kubernetes_pod_name
+
+      # 3. Métricas de los Nodos vía Node Exporter (DaemonSet)
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            action: keep
+            regex: node-exporter
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+
+      # 4. Métricas de los Contenedores vía cAdvisor (DaemonSet)
+      - job_name: 'cadvisor'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            action: keep
+            regex: cadvisor
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+
+  alerts.yml: |
+    groups:
+      - name: app-alerts
+        interval: 30s
+        rules:
+          # Alerta si el Backend no responde por más de 1 minuto
+          - alert: AppDown
+            expr: up{job="kubernetes-pods"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Backend caído"
+              description: "El pod de la API Flask no responde en el namespace {{ $labels.kubernetes_namespace }}."
+
+          # Alerta si el uso de CPU supera el 80%
+          - alert: HighCPU
+            expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "CPU alta en {{ $labels.instance }}"
+              description: "El uso de CPU del nodo superó el 80% (Valor actual: {{ $value | printf \"%.1f\" }}%)."
+
+          # Alerta si la tasa de errores HTTP 5xx supera el 5% del total.
+          # Proporción global de respuestas 5xx sobre el total de solicitudes.
+          # Sin tráfico, la expresión no activa la alerta.
+          - alert: HighErrorRate
+            expr: sum(rate(app_requests_total{status=~"5.."}[5m])) / sum(rate(app_requests_total[5m])) > 0.05
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Tasa de errores HTTP alta"
+              description: "Más del 5% de las solicitudes HTTP de la API Flask están fallando."
+
+          # Alerta si el disco supera el 85% de capacidad
+          - alert: DiskSpaceLow
+            expr: >-
+              (node_filesystem_size_bytes{mountpoint="/"} -
+              node_filesystem_free_bytes{mountpoint="/"}) /
+              node_filesystem_size_bytes{mountpoint="/"} > 0.85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Espacio en disco bajo"
+              description: "El almacenamiento en el volumen raíz superó el 85% de uso."
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: devops-portfolio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: devops-portfolio
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  replicas: 1
+  # El PVC es ReadWriteOnce; Recreate libera el volumen antes de iniciar
+  # el nuevo Pod.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      serviceAccountName: prometheus-sa
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.48.0
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=15d'
+            - '--web.enable-lifecycle'
+          ports:
+            - containerPort: 9090
+              name: web
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus
+            - name: prometheus-storage-volume
+              mountPath: /prometheus
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            name: prometheus-config
+        - name: prometheus-storage-volume
+          persistentVolumeClaim:
+            claimName: prometheus-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: devops-portfolio
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: web
+  selector:
+    app: prometheus
+
+# ==============================================================================
+# CONFIGURACIÓN DE GRAFANA
+# ==============================================================================
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: devops-portfolio
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-service:9090
+        isDefault: true
+        editable: true
+        jsonData:
+          timeInterval: "15s"
+          httpMethod: POST
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: devops-portfolio
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  dashboards-provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'DevOps Portfolio Dashboards'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 10
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-app
+  namespace: devops-portfolio
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  app-dashboard.json: |
+    {
+      "title": "DevOps Portfolio — App Metrics",
+      "uid": "devops-portfolio",
+      "timezone": "browser",
+      "refresh": "15s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Requests por segundo",
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "sum(rate(app_requests_total[1m]))",
+            "legendFormat": "req/s"
+          }],
+          "options": { "colorMode": "background", "graphMode": "area" },
+          "fieldConfig": { "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 50}
+            ]}
+          }}
+        },
+        {
+          "id": 2, "type": "stat", "title": "Latencia promedio (p50)",
+          "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "histogram_quantile(0.50, rate(app_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p50"
+          }],
+          "fieldConfig": { "defaults": {
+            "unit": "s",
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 1}
+            ]}
+          }}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Total notas en DB",
+          "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+          "targets": [{ "expr": "app_notes_total", "legendFormat": "notas" }],
+          "options": { "colorMode": "background", "graphMode": "area" },
+          "fieldConfig": { "defaults": { "color": { "fixedColor": "blue", "mode": "fixed" } } }
+        },
+        {
+          "id": 4, "type": "stat", "title": "Tasa de errores 5xx",
+          "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+          "targets": [{
+            "expr": "sum(rate(app_requests_total{status=~'5..'}[5m])) or vector(0)",
+            "legendFormat": "errores/s"
+          }],
+          "fieldConfig": { "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.1}
+            ]}
+          }}
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Requests por endpoint",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "sum by(endpoint, method)(rate(app_requests_total[1m]))",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Latencia por percentil",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(app_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, rate(app_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(app_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 7, "type": "timeseries", "title": "CPU del host (%)",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)",
+            "legendFormat": "CPU {{instance}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "percent", "max": 100 } }
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "Memoria del host",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+              "legendFormat": "Usado"
+            },
+            { "expr": "node_memory_MemAvailable_bytes", "legendFormat": "Disponible" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "bytes" } }
+        }
+      ]
+    }
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: devops-portfolio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: devops-portfolio
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  replicas: 1
+  # grafana-pvc también es ReadWriteOnce.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        component: monitoring
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.2.0
+          ports:
+            - containerPort: 3000
+              name: web
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "devops123"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+            - name: datasource-config
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider-config
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboard-app-config
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+        - name: datasource-config
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider-config
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboard-app-config
+          configMap:
+            name: grafana-dashboard-app
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: devops-portfolio
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: web
+  selector:
+    app: grafana
+
+# ==============================================================================
+# CONFIGURACIÓN DE EXPORTADORES (DAEMONSETS)
+# ==============================================================================
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: devops-portfolio
+  labels:
+    app: node-exporter
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+        component: monitoring
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.7.0
+          args:
+            - '--path.procfs=/host/proc'
+            - '--path.sysfs=/host/sys'
+            - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: rootfs
+              mountPath: /rootfs
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: rootfs
+          hostPath:
+            path: /
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter-service
+  namespace: devops-portfolio
+  labels:
+    app: node-exporter
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9100
+      targetPort: 9100
+      name: scrape
+  selector:
+    app: node-exporter
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cadvisor
+  namespace: devops-portfolio
+  labels:
+    app: cadvisor
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: cadvisor
+  template:
+    metadata:
+      labels:
+        app: cadvisor
+        component: monitoring
+    spec:
+      # cAdvisor no consulta el API Server y no necesita el token de la
+      # ServiceAccount. Además, /var/run se monta como sólo lectura.
+      automountServiceAccountToken: false
+      containers:
+        - name: cadvisor
+          image: gcr.io/cadvisor/cadvisor:v0.47.2
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+          volumeMounts:
+            - name: rootfs
+              mountPath: /rootfs
+              readOnly: true
+            - name: var-run
+              mountPath: /var/run
+              readOnly: true
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: docker
+              mountPath: /var/lib/docker
+              readOnly: true
+            - name: disk
+              mountPath: /dev/disk
+              readOnly: true
+      volumes:
+        - name: rootfs
+          hostPath:
+            path: /
+        - name: var-run
+          hostPath:
+            path: /var/run
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: docker
+          hostPath:
+            path: /var/lib/docker
+        - name: disk
+          hostPath:
+            path: /dev/disk
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cadvisor-service
+  namespace: devops-portfolio
+  labels:
+    app: cadvisor
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: scrape
+  selector:
+    app: cadvisor

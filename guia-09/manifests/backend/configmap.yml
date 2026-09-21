@@ -1,0 +1,15 @@
+# ============================================
+# configmap.yml — Variables de entorno no sensibles
+# ============================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: devops-portfolio
+data:
+  DB_HOST: "postgres-service"   # nombre del Service de Postgres
+  DB_PORT: "5432"
+  DB_NAME: "notesdb"
+  APP_ENV: "production"
+  APP_VERSION: "1.0.0"
+  PORT: "5000"

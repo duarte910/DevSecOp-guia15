@@ -1,0 +1,48 @@
+# ============================================
+# prometheus.yml — Configuración de scrape
+# TP08 — Plan DevOps
+# ============================================
+
+global:
+  scrape_interval: 15s       # cada cuánto recolecta métricas
+  evaluation_interval: 15s   # cada cuánto evalúa reglas de alerta
+  external_labels:
+    monitor: 'devops-portfolio'
+    environment: 'local'
+
+# ── Reglas de alerta ──────────────────────────────────────
+rule_files:
+  - "alerts.yml"
+
+# ── Targets a monitorear (scrape jobs) ───────────────────
+scrape_configs:
+
+  # Prometheus se monitorea a sí mismo
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Nuestra app Flask (expone /metrics)
+  - job_name: flask-app
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['backend:5000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'notes-backend'
+
+  # Métricas del host (CPU, memoria, disco, red)
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Métricas de los contenedores Docker
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metric_relabel_configs:
+      # Filtrar solo los contenedores del proyecto
+      - source_labels: [container_label_com_docker_compose_project]
+        regex: 'devops-TP08'
+        action: keep

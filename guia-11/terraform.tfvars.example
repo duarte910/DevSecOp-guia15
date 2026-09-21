@@ -1,0 +1,7 @@
+environment       = "dev"
+project_name      = "devops-portfolio"
+postgres_db       = "notesdb"
+postgres_password = "CAMBIAR_EN_PRODUCCION"
+backend_replicas  = 1
+frontend_port     = 8080
+backend_port      = 5000

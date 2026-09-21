@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  backend:
+    environment:
+      APP_ENV: development
+    # En dev, montar el código como volumen (hot reload)
+    volumes:
+      - ./backend/app.py:/app/app.py:ro
+    command: ["python3", "-m", "flask", "run", "--host=0.0.0.0",
+              "--port=5000", "--debug"]
+
+  db:
+    # En dev, exponer Postgres al host para conectar con DBeaver/psql
+    ports:
+      - "5432:5432"

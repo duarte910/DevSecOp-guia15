@@ -1,0 +1,187 @@
+# ============================================
+# cicd.yml — Pipeline completo CI/CD
+# TP07 — Plan DevOps
+# ============================================
+
+name: CI/CD Pipeline
+
+# ── Triggers ──────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main          # pipeline completo
+      - develop       # solo CI (sin deploy)
+      - 'feature/**'  # solo lint + test
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# ── Variables globales ────────────────────────────────────
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/devops-portfolio
+  PYTHON_VERSION: "3.12"
+
+# ── Jobs ──────────────────────────────────────────────────
+jobs:
+
+  # ── Job 1: Lint ────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-TP06/backend/requirements.txt
+
+      - name: Instalar dependencias de lint
+        run: pip install flake8 yamllint
+
+      - name: Lint Python (flake8)
+        run: |
+          flake8 devops-TP06/backend/ \
+            --max-line-length=100 \
+            --exclude=devops-TP06/backend/tests/ \
+            --count --statistics
+
+      - name: Lint YAML (yamllint)
+        run: |
+          yamllint -c .yamllint.yml \
+            devops-TP06/docker-compose.yml \
+            .github/workflows/
+
+  # ── Job 2: Test ────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint   # solo corre si lint pasa
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-TP06/backend/requirements.txt
+
+      - name: Instalar dependencias
+        run: pip install -r devops-TP06/backend/requirements.txt
+
+      - name: Correr tests con cobertura
+        run: |
+          cd devops-TP06/backend
+          pytest tests/ \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -v
+
+      - name: Subir reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: devops-TP06/backend/coverage.xml
+          retention-days: 7
+
+  # ── Job 3: Test de la app integrada (devops-tp12) ──────
+  # Prueba el código integrado que despliega devops-tp12/scripts/deploy.sh.
+  # Las imágenes se construyen para validarlas, pero no se publican.
+  test-integrated-app:
+    name: Test App Integrada (devops-tp12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-tp12/app/backend/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r devops-tp12/app/backend/requirements-dev.txt
+
+      - name: Lint (flake8)
+        run: |
+          flake8 devops-tp12/app/backend/app.py \
+            --max-line-length=100 \
+            --extend-ignore=E302,E701,E702,W391
+
+      - name: Tests con cobertura (backend integrado, incluye regresión de nota sin título)
+        run: |
+          cd devops-tp12/app/backend
+          pytest tests/ --cov=. --cov-report=term-missing -v
+
+      - name: Build de las imágenes que despliega Kubernetes (sin publicar)
+        run: |
+          docker build -t notes-backend:ci-check devops-tp12/app/backend
+          docker build -t notes-frontend:ci-check devops-tp12/app/frontend
+
+  # ── Job 4: Build y Push ────────────────────────────────
+  # Conserva la publicación del backend heredado en main y develop.
+  build-push:
+    name: Build y Push imagen
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      # Genera tags automáticos: latest, sha-abc123, v1.0 si hay tag
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Login a Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # buildx permite builds multi-plataforma (linux/amd64 + linux/arm64)
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build y Push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./devops-TP06/backend
+          target: final
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache entre runs para builds más rápidos
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumen del build
+        run: |
+          {
+            echo "### Imagen publicada"
+            echo "Tags: ${{ steps.meta.outputs.tags }}"
+            echo "Digest: ${{ steps.build.outputs.digest }}"
+          } >> "$GITHUB_STEP_SUMMARY"

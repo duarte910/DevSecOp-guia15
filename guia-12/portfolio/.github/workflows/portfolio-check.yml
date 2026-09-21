@@ -1,0 +1,119 @@
+# ============================================
+# portfolio-check.yml
+# Valida que todos los repos del portfolio
+# estén actualizados y funcionando
+# ============================================
+
+name: Portfolio Health Check
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'    # todos los lunes a las 9am
+  push:
+    branches: [main]
+  workflow_dispatch:         # permite correrlo manualmente
+
+jobs:
+  check-repos:
+    name: Verificar repos del portfolio
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout portfolio
+        uses: actions/checkout@v4
+
+      - name: Verificar que los repos existen y tienen README
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          USUARIO="${{ github.repository_owner }}"
+          REPOS=(
+            "devops-TP01"
+            "devops-TP02"
+            "devops-TP03"
+            "devops-TP04"
+            "devops-TP05"
+            "devops-TP06"
+            "devops-TP08"
+            "devops-TP09"
+            "devops-TP10"
+            "devops-TP11"
+          )
+
+          ERRORES=0
+          echo "### Estado del portfolio" >> $GITHUB_STEP_SUMMARY
+          echo "| Repo | Estado | Último commit |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+
+          for REPO in "${REPOS[@]}"; do
+            URL="https://api.github.com/repos/$USUARIO/$REPO"
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: token $GH_TOKEN" "$URL")
+
+            if [ "$CODE" = "200" ]; then
+              LAST=$(curl -s \
+                -H "Authorization: token $GH_TOKEN" \
+                "$URL/commits/main" | python3 -c \
+                "import sys,json; d=json.load(sys.stdin); \
+                 print(d['commit']['committer']['date'][:10])" 2>/dev/null || echo "?")
+              echo "  [OK]  $REPO (último commit: $LAST)"
+              echo "| $REPO | ✅ activo | $LAST |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "  [FAIL] $REPO no encontrado (HTTP $CODE)"
+              echo "| $REPO | ❌ no encontrado | — |" >> $GITHUB_STEP_SUMMARY
+              ERRORES=$((ERRORES+1))
+            fi
+          done
+
+          echo ""
+          echo "Total repos verificados: ${#REPOS[@]}"
+          echo "Errores: $ERRORES"
+
+          [ "$ERRORES" -eq 0 ] && exit 0 || exit 1
+
+  lint-readme:
+    name: Lint del README principal
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar que el README tiene todas las secciones
+        run: |
+          SECCIONES=(
+            "Stack tecnológico"
+            "Proyectos por TP"
+            "1 al 4"
+            "5 al 8"
+            "9 al 12"
+            "Plataformas usadas"
+          )
+          FALTANTES=0
+          for SEC in "${SECCIONES[@]}"; do
+            if grep -q "$SEC" README.md; then
+              echo "  [OK]  Sección: $SEC"
+            else
+              echo "  [FAIL] Falta sección: $SEC"
+              FALTANTES=$((FALTANTES+1))
+            fi
+          done
+          [ "$FALTANTES" -eq 0 ] && echo "README completo" || exit 1
+
+  generate-summary:
+    name: Generar resumen del portfolio
+    runs-on: ubuntu-latest
+    needs: [check-repos, lint-readme]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generar stats del portfolio
+        run: |
+          echo "## Portfolio Stats — $(date '+%Y-%m-%d')"
+          echo ""
+          echo "- TPs completados: 12 / 12"
+          echo "- Tecnologías cubiertas: $(grep -o '|.*|' README.md | wc -l) entradas en tabla de stack"
+          echo "- Repos del portfolio: 11"
+          echo "- Inversión total: \$0"
+          echo ""
+          echo "Pipeline corrido exitosamente"

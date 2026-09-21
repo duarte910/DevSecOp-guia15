@@ -1,0 +1,29 @@
+global:
+  environment: production
+
+backend:
+  replicas: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 60
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+
+frontend:
+  replicas: 3
+
+postgres:
+  storage:
+    size: 10Gi
+  credentials:
+    password: "super-secret-prod-password"
+
+ingress:
+  host: devops-portfolio.com

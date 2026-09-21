@@ -1,0 +1,11 @@
+# ============================================
+# namespace.yml
+# Agrupa todos los recursos del proyecto
+# ============================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devops-portfolio
+  labels:
+    project: devops-portfolio
+    TP: "09"

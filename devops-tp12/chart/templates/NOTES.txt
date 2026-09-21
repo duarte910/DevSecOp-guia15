@@ -1,0 +1,22 @@
+Notes App instalada.
+
+Release:     {{ .Release.Name }}
+Namespace:   {{ .Values.global.namespace }}
+Entorno:     {{ .Values.global.environment }}
+App version: {{ .Chart.AppVersion }}
+
+En el laboratorio k3d creado por scripts/create-cluster.sh:
+
+  1. Agregá esta entrada a /etc/hosts si vas a usar el navegador:
+     127.0.0.1 {{ .Values.ingress.host }}
+
+  2. Abrí:
+     https://{{ .Values.ingress.host }}:18443/
+
+  3. Para comprobar HTTPS desde devops-tp12/:
+     curl --cacert certs/tls.crt --resolve {{ .Values.ingress.host }}:18443:127.0.0.1 https://{{ .Values.ingress.host }}:18443/health
+
+Comandos útiles:
+  kubectl get all -n {{ .Values.global.namespace }}
+  helm status {{ .Release.Name }}
+  helm history {{ .Release.Name }}

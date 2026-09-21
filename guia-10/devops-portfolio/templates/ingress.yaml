@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devops-portfolio-ingress
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "devops-portfolio.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Frontend: raíz del dominio
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+          # Backend API: /api/* va directo al backend
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: {{ .Values.backend.port }}
+          # Health check del backend
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: {{ .Values.backend.port }}
+{{- end }}

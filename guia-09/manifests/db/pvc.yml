@@ -1,0 +1,15 @@
+# ============================================
+# pvc.yml — PersistentVolumeClaim para Postgres
+# Solicita 1Gi de almacenamiento persistente
+# ============================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: devops-portfolio
+spec:
+  accessModes:
+    - ReadWriteOnce       # un solo nodo puede montar este volumen
+  resources:
+    requests:
+      storage: 1Gi

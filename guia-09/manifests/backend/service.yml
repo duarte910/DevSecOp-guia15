@@ -1,0 +1,19 @@
+# ============================================
+# service.yml — Service del Backend
+# ClusterIP: solo accesible dentro del cluster
+# ============================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: devops-portfolio
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000

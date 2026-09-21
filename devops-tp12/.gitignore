@@ -1,0 +1,15 @@
+certs/
+__pycache__/
+.pytest_cache/
+.coverage
+*.pyc
+threagile-stub-model.yaml
+threagile-sin-tracking.yaml
+report.pdf
+data-flow-diagram.png
+data-asset-diagram.png
+risks.json
+risks.xlsx
+tags.xlsx
+stats.json
+technical-assets.json

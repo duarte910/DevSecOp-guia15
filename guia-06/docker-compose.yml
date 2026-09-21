@@ -1,0 +1,73 @@
+# ============================================
+# docker-compose.yml — App de notas: 3 servicios
+# TP06 — Plan DevOps
+# ============================================
+
+version: "3.9"
+
+services:
+
+  # ── Base de datos ──────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: notes-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-notesdb}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend API ────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      target: final          # usa el stage final del multi-stage
+    container_name: notes-backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db            # nombre del servicio = hostname interno
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-notesdb}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      APP_ENV: ${APP_ENV:-production}
+    depends_on:
+      db:
+        condition: service_healthy   # espera el healthcheck de db
+    networks:
+      - app-network
+    # Puerto NO expuesto al host: solo accesible internamente
+    expose:
+      - "5000"
+
+  # ── Frontend ───────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    container_name: notes-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"    # único servicio expuesto al host
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+# ── Redes ──────────────────────────────────
+networks:
+  app-network:
+    driver: bridge
+
+# ── Volúmenes ──────────────────────────────
+volumes:
+  postgres-data:
+    driver: local

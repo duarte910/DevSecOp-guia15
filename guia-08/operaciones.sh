@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+B="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"; cd "$B"; export COMPOSE_PROJECT_NAME=operaciones1-guia08; [[ -f .env ]] || cp .env.example .env
+if [[ ${OPERACIONES_GLOBAL:-0} == 1 ]]; then export FRONTEND_PORT=18008 PROMETHEUS_PORT=19090 GRAFANA_PORT=13000 NODE_EXPORTER_PORT=19100 CADVISOR_PORT=18081; else export FRONTEND_PORT=${FRONTEND_PORT:-8080} PROMETHEUS_PORT=${PROMETHEUS_PORT:-9090} GRAFANA_PORT=${GRAFANA_PORT:-3000} NODE_EXPORTER_PORT=${NODE_EXPORTER_PORT:-9100} CADVISOR_PORT=${CADVISOR_PORT:-8081}; fi
+case ${1:-} in iniciar) docker compose up -d --build --wait;; detener) docker compose down;; reiniciar) "$B/operaciones.sh" detener; "$B/operaciones.sh" iniciar;; estado) docker compose ps;; verificar) docker compose config -q; "$B/scripts/verificar.sh" "http://127.0.0.1:$FRONTEND_PORT"; for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/targets" | jq -e '[.data.activeTargets[].health]|all(.=="up")' >/dev/null && exit 0; sleep 1; done; exit 1;; logs) docker compose logs --tail=100;; *) exit 64;; esac

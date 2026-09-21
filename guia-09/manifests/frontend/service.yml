@@ -1,0 +1,21 @@
+# ============================================
+# service.yml — Service del Frontend
+# NodePort: expone la app al exterior del cluster
+# en el puerto 30080 de cada nodo
+# ============================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: devops-portfolio
+  labels:
+    app: frontend
+spec:
+  type: NodePort            # expuesto al exterior
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080       # puerto accesible desde fuera del cluster

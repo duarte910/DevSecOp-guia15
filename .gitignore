@@ -1,0 +1,11 @@
+.venv/
+semgrep-results.json
+semgrep.sarif
+.semgrep_logs/
+.semgrep-tmp/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+__pycache__/
+.pytest_cache/
+*.pyc

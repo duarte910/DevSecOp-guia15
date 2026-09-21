@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+B="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"; cluster=operaciones1; ns=devops-portfolio; port=${K3D_HTTP_PORT:-$([[ ${OPERACIONES_GLOBAL:-0} == 1 ]] && echo 18009 || echo 8089)}
+start(){ k3d cluster list -o json | jq -e --arg n "$cluster" '.[]|select(.name==$n)' >/dev/null || k3d cluster create "$cluster" --servers 1 --agents 1 -p "127.0.0.1:${port}:30080@agent:0" --wait; docker build -t operaciones1-guia09-backend:local "$B/backend"; docker build -t operaciones1-guia09-frontend:local "$B/frontend"; k3d image import -c "$cluster" operaciones1-guia09-backend:local operaciones1-guia09-frontend:local; "$B/scripts/deploy.sh"; }
+case ${1:-} in iniciar) start;; detener) kubectl delete -f "$B/manifests" --recursive --ignore-not-found --wait=false;; reiniciar) "$0" detener; start;; estado) kubectl get all,pvc,configmap,secret -n "$ns";; verificar) "$B/scripts/verificar.sh";; logs) kubectl logs -n "$ns" deployment/backend --tail=100;; *) exit 64;; esac

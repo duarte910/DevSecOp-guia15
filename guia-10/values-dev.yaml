@@ -1,0 +1,28 @@
+global:
+  environment: development
+
+backend:
+  replicas: 1
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"
+
+frontend:
+  replicas: 1
+  resources:
+    requests:
+      memory: "32Mi"
+      cpu: "25m"
+
+postgres:
+  credentials:
+    password: "dev-password"
+
+ingress:
+  host: devops-portfolio.dev

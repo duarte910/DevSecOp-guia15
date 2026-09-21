@@ -1,0 +1,22 @@
+# ============================================
+# values-local.yaml — Imágenes construidas y cargadas localmente
+# en el clúster k3d, sin publicar en Docker Hub.
+# Uso: helm upgrade --install mi-app ./chart -f values-local.yaml
+# ============================================
+
+backend:
+  image:
+    repository: notes-backend
+    tag: "tp14"
+    pullPolicy: IfNotPresent
+  replicas: 1
+
+frontend:
+  image:
+    repository: notes-frontend
+    tag: "tp14"
+    pullPolicy: IfNotPresent
+  replicas: 1
+
+ingress:
+  host: devops-portfolio.local

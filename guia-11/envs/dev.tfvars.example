@@ -1,0 +1,4 @@
+environment = "dev"
+frontend_port = 8111
+postgres_password = "devops123"
+

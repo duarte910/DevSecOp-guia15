@@ -1,0 +1,21 @@
+╔════════════════════════════════════════╗
+║   DevOps Portfolio — Instalado OK      ║
+╚════════════════════════════════════════╝
+
+Release:     {{ .Release.Name }}
+Namespace:   {{ .Values.global.namespace }}
+Entorno:     {{ .Values.global.environment }}
+App version: {{ .Chart.AppVersion }}
+
+Para acceder a la app:
+
+  1. Agregar al /etc/hosts:
+     echo "$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}') {{ .Values.ingress.host }}" | sudo tee -a /etc/hosts
+
+  2. Abrir en el navegador:
+     http://{{ .Values.ingress.host }}
+
+Comandos útiles:
+  kubectl get all -n {{ .Values.global.namespace }}
+  helm status {{ .Release.Name }}
+  helm history {{ .Release.Name }}
