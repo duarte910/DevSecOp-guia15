@@ -1,0 +1,104 @@
+name: DevSecOps - Semgrep SAST Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep-scan:
+    name: SAST Scan Multilenguaje
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar Semgrep
+        run: python3 -m pip install semgrep
+
+      - name: Renderizar Helm para el análisis
+        run: |
+          mkdir -p .semgrep-tmp
+          helm template tp15 devops-tp12/chart \
+            -f devops-tp12/values-local.yaml \
+            > .semgrep-tmp/helm-rendered.yaml
+
+      - name: Ejecutar Semgrep y generar JSON
+        run: |
+          semgrep scan \
+            --config=p/owasp-top-ten \
+            --config=p/python \
+            --config=p/dockerfile \
+            --config=p/terraform \
+            --config=p/kubernetes \
+            --json --output=semgrep-results.json \
+            devops-tp12/app \
+            devops-tp12/monitoring-k8s-manifests.yaml \
+            guia-11 .semgrep-tmp || true
+
+      - name: Resumen de Auditoría SAST
+        if: always()
+        shell: bash
+        run: |
+          test -s semgrep-results.json || printf '{"results":[],"errors":[]}' > semgrep-results.json
+          total=$(jq '.results | length' semgrep-results.json)
+          errores=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json)
+          warnings=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' semgrep-results.json)
+          errores_scan=$(jq '.errors | length' semgrep-results.json)
+          {
+            echo "### Reporte de Análisis Estático SAST (Semgrep)"
+            echo
+            echo "| Capa auditada | Reglas aplicadas | Estado |"
+            echo "|---|---|---|"
+            echo "| Backend Python | OWASP Top 10 + Python | Completado |"
+            echo "| Contenedores | Dockerfile | Completado |"
+            echo "| IaC | Terraform | Completado |"
+            echo "| Orquestación | Kubernetes + Helm/YAML | Completado |"
+            echo
+            echo "Hallazgos: **${total}**; ERROR: **${errores}**; WARNING: **${warnings}**."
+            echo "Incidencias del analizador: **${errores_scan}**."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Subir artefacto de resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-results.json
+          retention-days: 7
+
+      - name: Generar reporte SARIF
+        run: |
+          semgrep scan --config=auto \
+            --sarif --output=semgrep.sarif \
+            devops-tp12/app \
+            devops-tp12/monitoring-k8s-manifests.yaml \
+            guia-11 .semgrep-tmp || true
+
+      - name: Cargar resultados a GitHub Code Scanning
+        if: always() && hashFiles('semgrep.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      - name: Guard estricto de seguridad (Andon Cord)
+        run: |
+          semgrep scan --config=p/owasp-top-ten \
+            --severity=ERROR --error \
+            devops-tp12/app \
+            devops-tp12/chart \
+            devops-tp12/monitoring-k8s-manifests.yaml \
+            guia-11
